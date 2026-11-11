@@ -9,6 +9,7 @@ ATP、IPB、OPB、SPB 板卡日志解析与源码辅助 RCA 分析软件，使�
 - 建立板卡专用函数调用关系库，查询日志编码、函数、调用者和被调用者。
 - 按 `crash-log-rca` 技能进行周期切段、逐层回溯和自检逐项核对。
 - 正常基线与故障样本维护，支持任务取消和事务回滚。
+- 主界面选择源码分支，各分支独立保存源码关系库、字典、正常基线和版本设置。
 
 ## 目录
 
@@ -21,7 +22,10 @@ LogDiagnosis/                 Qt 客户端、测试、源码索引工具和 SKIL
     index_source.py
     board_profiles.json
     plugin/                   Qt 查询与 AI 证据插件
-NewAnalysis/                  当前客户端使用的共享解析器和基线代码
+  NewAnalysis/                工程内的共享解析器和基线代码
+  board_config/               本地板卡配置
+  code_branches/              分支源码、配置清单、关系库与分析数据
+  分支使用说明.md
 ```
 
 ## 构建
@@ -37,16 +41,19 @@ powershell -ExecutionPolicy Bypass -File .\LogDiagnosis\source_relations\build.p
 
 ## 本地分析资料
 
-按需在本地准备 MSCP C/H 源码、四个板卡的 `PROJECT_OR_BOARD_PTCL.h`、PLFM 字典和待分析日志。在 Windows 桌面的 `ATP`、`IPB`、`OPB`、`SPB` 文件夹放置配置头文件，或修改 `board_profiles.json` 中的路径。
+首次从仓库构建时，请在本地准备四种板卡的实际配置头文件，分别放入 `LogDiagnosis/board_config/ATP`、`IPB`、`OPB`、`SPB` 下的 `PROJECT_OR_BOARD_PTCL.h`。程序新建分支时会复制这些配置作为模板，再按对应分支核对和替换。配置头的本地 include 依赖也需要保留。
+
+当前 MSCP 分支的源码放入 `LogDiagnosis/code_branches/MSCP_MSCP/source/`，保留完整 C/H 源码目录结构。对应字典可放入 `code_branches/MSCP_MSCP/board_config/板卡名/dictionary_PLFM.csv`，也可在设置中选择。其他分支通过主界面的“新建分支”准备目录，操作步骤见 [分支使用说明](LogDiagnosis/分支使用说明.md)。
 
 ```powershell
 & .\LogDiagnosis\bin\source_relations\SourceIndexer.exe `
-  --source 'C:\path\to\MSCP_MSCP' `
-  --output '.\LogDiagnosis\bin\source_relations\MSCP_MSCP.sqlite' `
+  --source '.\LogDiagnosis\code_branches\MSCP_MSCP\source' `
+  --output '.\LogDiagnosis\code_branches\MSCP_MSCP\relations\source.sqlite' `
+  --profiles '.\LogDiagnosis\code_branches\MSCP_MSCP\board_profiles.json' `
   --all-boards --version '软件版本或源码快照标记'
 ```
 
-配置头和固件源码用于本地建库，生成的 SQLite 会保存源码文本。将这些资料与数据库保存在 `.gitignore` 指定的本地目录中。
+配置头、固件源码、字典、日志和生成的数据库按 `.gitignore` 作为本地分析资料管理。关系库保存源码快照，更新分支源码后通过“源码关系查询 → 重建关系库”更新快照。
 
 启动 `LogDiagnosis/bin/LogDiagnosis.exe`，配置字典及 DeepSeek API Key 后导入日志。正常基线可按板卡建立，用于数值对照。API Key 由 Windows 凭据管理器保存。
 

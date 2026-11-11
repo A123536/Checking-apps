@@ -1,6 +1,6 @@
 {
   "ATP": {
-    "configuration_header": "%USERPROFILE%/Desktop/ATP/PROJECT_OR_BOARD_PTCL.h",
+    "configuration_header": "../board_config/ATP/PROJECT_OR_BOARD_PTCL.h",
     "fallback_header": "config/ATP/PROJECT_OR_BOARD_PTCL.h",
     "expected_board_macro": "IS_5728_MCP",
     "defines": {},
@@ -10,21 +10,21 @@
     ]
   },
   "IPB": {
-    "configuration_header": "%USERPROFILE%/Desktop/IPB/PROJECT_OR_BOARD_PTCL.h",
+    "configuration_header": "../board_config/IPB/PROJECT_OR_BOARD_PTCL.h",
     "fallback_header": "config/IPB/PROJECT_OR_BOARD_PTCL.h",
     "expected_board_macro": "IS_570_IPB",
     "defines": {},
     "closed_world": true
   },
   "OPB": {
-    "configuration_header": "%USERPROFILE%/Desktop/OPB/PROJECT_OR_BOARD_PTCL.h",
+    "configuration_header": "../board_config/OPB/PROJECT_OR_BOARD_PTCL.h",
     "fallback_header": "config/OPB/PROJECT_OR_BOARD_PTCL.h",
     "expected_board_macro": "IS_570_OPB",
     "defines": {},
     "closed_world": true
   },
   "SPB": {
-    "configuration_header": "%USERPROFILE%/Desktop/SPB/PROJECT_OR_BOARD_PTCL.h",
+    "configuration_header": "../board_config/SPB/PROJECT_OR_BOARD_PTCL.h",
     "fallback_header": "config/SPB/PROJECT_OR_BOARD_PTCL.h",
     "expected_board_macro": "IS_570_SIG",
     "defines": {},

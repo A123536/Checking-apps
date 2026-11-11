@@ -41,6 +41,8 @@
 #include <QCryptographicHash>
 #include <QCoreApplication>
 #include <QDir>
+#include <QProcess>
+#include <QInputDialog>
 #include <QtCore/qscopeguard.h>
 
 class LoopbackDeepSeek : public DeepSeekClient
@@ -153,6 +155,113 @@ class DiagnosisUiTests : public QObject
     }
 
 private slots:
+    void sourceBranchesSwitchEvidenceAndKeepIndependentSettings()
+    {
+        QTemporaryDir branches;
+        const QByteArray previousRoot = qgetenv("LOGDIAG_BRANCH_ROOT");
+        qputenv("LOGDIAG_BRANCH_ROOT", branches.path().toUtf8());
+        auto restore = qScopeGuard([&]() {
+            if(previousRoot.isNull()) qunsetenv("LOGDIAG_BRANCH_ROOT");
+            else qputenv("LOGDIAG_BRANCH_ROOT", previousRoot);
+            QSettings().remove("sourceBranches");
+        });
+        const auto writeFile = [](const QString &path, const QByteArray &content) {
+            QFile file(path);
+            return file.open(QIODevice::WriteOnly) && file.write(content) == content.size();
+        };
+        const QString indexer = QCoreApplication::applicationDirPath() + "/source_relations/SourceIndexer.exe";
+        QVERIFY(QFileInfo::exists(indexer));
+        const QStringList boards{"ATP", "IPB", "OPB", "SPB"};
+        const QStringList macros{"IS_5728_MCP", "IS_570_IPB", "IS_570_OPB", "IS_570_SIG"};
+        for(const QString &name : {QString("alpha"), QString("beta")}) {
+            const QString directory = branches.filePath(name);
+            QVERIFY(QDir().mkpath(directory + "/source"));
+            QVERIFY(QDir().mkpath(directory + "/relations"));
+            QVERIFY(writeFile(directory + "/source/a.c", ("#define CODE 0x0001\nvoid " + name + "(void) { DarkLogPrint(1, &" + name + "_value, CODE, 1); }\n").toUtf8()));
+            QJsonObject profiles;
+            for(int board = 0; board < boards.size(); ++board) {
+                QByteArray header;
+                for(int macro = 0; macro < macros.size(); ++macro)
+                    header += ("#define " + macros[macro] + (macro == board ? " 1\n" : " 0\n")).toUtf8();
+                QVERIFY(writeFile(directory + '/' + boards[board] + ".h", header));
+                profiles.insert(boards[board], QJsonObject{{"configuration_header", boards[board] + ".h"},
+                    {"expected_board_macro", macros[board]}, {"defines", QJsonObject()}, {"closed_world", true}});
+            }
+            QVERIFY(writeFile(directory + "/board_profiles.json", QJsonDocument(profiles).toJson()));
+            QProcess builder;
+            builder.start(indexer, {"--source", directory + "/source", "--output", directory + "/relations/source.OPB.sqlite",
+                                  "--board", "OPB", "--profiles", directory + "/board_profiles.json"});
+            QVERIFY(builder.waitForFinished(30000));
+            QCOMPARE(builder.exitCode(), 0);
+        }
+        const QString csv = branches.filePath("OPB_incident.csv");
+        QVERIFY(writeFile(csv, QStringLiteral("消息类型,消息编码,消息编码解释,消息内容(16进制),消息内容解释\n错误,0x0001,执行失败,0x01,失败\n").toUtf8()));
+        auto *client = new SimulatedDeepSeek;
+        {
+            MainWindow window(nullptr, new SimulatedParser, client);
+            auto *combo = window.findChild<QComboBox *>("sourceBranchCombo"); QVERIFY(combo);
+            QCOMPARE(combo->count(), 2);
+            QCOMPARE(combo->currentData().toString(), QString("alpha"));
+            auto *version = window.findChild<QLineEdit *>("analysisSoftwareVersion");
+            auto *baseline = window.findChild<QLineEdit *>("analysisBaselinePath");
+            auto *database = window.findChild<QLineEdit *>("analysisSourceDatabasePath");
+            QVERIFY(database->isReadOnly());
+            window.findChild<QCheckBox *>("rememberApiKey")->setChecked(false);
+            window.findChild<QLineEdit *>("apiKeyEdit")->setText("test-placeholder");
+            QVERIFY(DropFiles(window, {csv}));
+            auto *ai = window.findChild<QPushButton *>("aiAnalysisButton");
+            ai->click();
+            QVERIFY(!combo->isEnabled());
+            QTRY_COMPARE_WITH_TIMEOUT(client->calls, 1, 10000);
+            QTRY_VERIFY_WITH_TIMEOUT(ai->isEnabled(), 10000);
+            auto evidence = QJsonDocument::fromJson(client->received.toUtf8()).object();
+            QCOMPARE(evidence["source_branch"].toObject()["name"].toString(), QString("alpha"));
+            QVERIFY(!evidence["source_evidence"].toObject()["records"].toArray().isEmpty());
+            QVERIFY(QJsonDocument(evidence["source_evidence"].toObject()).toJson().contains("alpha_value"));
+            version->setText("alpha-version");
+            baseline->setText(branches.filePath("alpha-normal.db"));
+            combo->setCurrentIndex(combo->findData("beta"));
+            QVERIFY(version->text().isEmpty());
+            QVERIFY(baseline->text().isEmpty());
+            QVERIFY(window.findChild<QPlainTextEdit *>("aiResultOutput")->toPlainText().isEmpty());
+            ai->click();
+            QTRY_COMPARE_WITH_TIMEOUT(client->calls, 2, 10000);
+            QTRY_VERIFY_WITH_TIMEOUT(ai->isEnabled(), 10000);
+            evidence = QJsonDocument::fromJson(client->received.toUtf8()).object();
+            QCOMPARE(evidence["source_branch"].toObject()["name"].toString(), QString("beta"));
+            QVERIFY(QJsonDocument(evidence["source_evidence"].toObject()).toJson().contains("beta_value"));
+            combo->setCurrentIndex(combo->findData("alpha"));
+            QCOMPARE(version->text(), QString("alpha-version"));
+            QCOMPARE(baseline->text(), branches.filePath("alpha-normal.db"));
+            combo->setCurrentIndex(combo->findData("beta"));
+            window.findChild<QPushButton *>("sourceRelationsButton")->click();
+            auto *widget = window.findChild<QWidget *>("sourceQueryWidget"); QVERIFY(widget);
+            QCOMPARE(widget->property("sourceRoot").toString(), branches.filePath("beta/source"));
+            widget->setProperty("building", true);
+            combo->setCurrentIndex(combo->findData("alpha"));
+            QCOMPARE(combo->currentData().toString(), QString("beta"));
+            widget->setProperty("building", false);
+        }
+        MainWindow reopened;
+        QCOMPARE(reopened.findChild<QComboBox *>("sourceBranchCombo")->currentData().toString(), QString("beta"));
+        QVERIFY(QFile::remove(branches.filePath("beta/relations/source.OPB.sqlite")));
+        QVERIFY(DropFiles(reopened, {csv}));
+        reopened.findChild<QLineEdit *>("apiKeyEdit")->setText("test-placeholder");
+        reopened.findChild<QPushButton *>("aiAnalysisButton")->click();
+        QVERIFY(reopened.findChild<QLabel *>("analysisStage")->text().contains(QStringLiteral("重建关系库")));
+        reopened.findChild<QPushButton *>("sourceRelationsButton")->click();
+        auto *query = reopened.findChild<QWidget *>("sourceQueryWidget"); QVERIFY(query);
+        QTimer::singleShot(0, [&]() {
+            auto *prompt = query->findChild<QInputDialog *>();
+            if(prompt) { prompt->setTextValue("beta-build"); prompt->accept(); }
+        });
+        query->findChild<QPushButton *>("rebuildSourceDatabaseButton")->click();
+        QVERIFY(query->property("building").toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(!query->property("building").toBool(), 30000);
+        for(const QString &board : boards)
+            QVERIFY(QFileInfo(branches.filePath("beta/relations/source." + board + ".sqlite")).isFile());
+    }
+
     void aiRequestLoadsRcaSkillAndReloadsFile()
     {
         QVector<QJsonObject> requests;

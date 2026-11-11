@@ -1,14 +1,34 @@
 import contextlib
 import io
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
 
-from index_source import build, constant
+from index_source import build, constant, read_profiles
 
 
 class SourceIndexTests(unittest.TestCase):
+    def test_configuration_path_is_relative_to_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'board_config' / 'ATP'
+            config.mkdir(parents=True)
+            header = config / 'PROJECT_OR_BOARD_PTCL.h'
+            header.write_text('#define IS_5728_MCP 1\n', encoding='utf-8')
+            manifest_dir = root / 'source_relations'
+            manifest_dir.mkdir()
+            manifest = manifest_dir / 'board_profiles.json'
+            manifest.write_text(json.dumps({'ATP': {
+                'configuration_header': '../board_config/ATP/PROJECT_OR_BOARD_PTCL.h',
+                'defines': {},
+            }}), encoding='utf-8')
+            profile = read_profiles(manifest)['ATP']
+            self.assertEqual(Path(profile['_configuration_path']), header.resolve())
+            self.assertIn(str(header.resolve()), profile['_configuration_dependencies'])
+            self.assertEqual(profile['_configuration_origin'], 'provided_configuration_file')
+
     def test_scope_callbacks_logs_and_conditions(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

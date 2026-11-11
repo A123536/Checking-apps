@@ -20,6 +20,11 @@
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFile>
+#include <QSaveFile>
+#include <QInputDialog>
+#include <QDesktopServices>
+#include <QTemporaryDir>
 #include <QFrame>
 #include <QFormLayout>
 #include <QGridLayout>
@@ -278,13 +283,14 @@ MainWindow::MainWindow(QWidget *parent, LegacyParserAdapter *parser, DeepSeekCli
     sourceRelationsButton->setObjectName(QStringLiteral("sourceRelationsButton"));
     header->addWidget(sourceRelationsButton);
     connect(sourceRelationsButton, &QPushButton::clicked, this, [this]() {
-        if(CurrentBoardId().isEmpty()) { m_StageLabel->setText(QStringLiteral("请先导入日志，自动识别板卡后查询对应源码")); return; }
+        if(CurrentBoardId().isEmpty() && m_SourceBranch.isEmpty()) { m_StageLabel->setText(QStringLiteral("请先导入日志，自动识别板卡后查询对应源码")); return; }
         QDialog *existing = findChild<QDialog *>(QStringLiteral("sourceRelationsDialog"));
         if(existing) {
             auto *queryWidget = existing->findChild<QWidget *>("sourceQueryWidget");
             if(queryWidget) queryWidget->setProperty("expectedBoard", CurrentBoardId());
             auto *path = existing->findChild<QLineEdit *>("sourceDatabasePath");
             if(path) path->setText(BoardIdentity::sourceDatabase(m_SourceDatabaseEdit->text().trimmed(), CurrentBoardId()));
+            ConfigureSourceQueryWidget(queryWidget);
             existing->show(); existing->raise(); existing->activateWindow(); return;
         }
         QString errorMessage;
@@ -302,9 +308,11 @@ MainWindow::MainWindow(QWidget *parent, LegacyParserAdapter *parser, DeepSeekCli
         auto *queryWidget = plugin->createQueryWidget(
             BoardIdentity::sourceDatabase(m_SourceDatabaseEdit->text().trimmed(), CurrentBoardId()), dialog);
         queryWidget->setProperty("expectedBoard", CurrentBoardId());
+        ConfigureSourceQueryWidget(queryWidget);
         dialogLayout->addWidget(queryWidget);
         connect(dialog, &QDialog::finished, this, [this](int) {
-            m_SourceDatabaseEdit->setText(QSettings().value("sourceRelations/database", m_SourceDatabaseEdit->text()).toString());
+            if(m_SourceBranch.isEmpty())
+                m_SourceDatabaseEdit->setText(QSettings().value("sourceRelations/database", m_SourceDatabaseEdit->text()).toString());
         });
         dialog->show();
     });
@@ -315,6 +323,31 @@ MainWindow::MainWindow(QWidget *parent, LegacyParserAdapter *parser, DeepSeekCli
     header->addWidget(m_ManagementButton);
     header->addWidget(m_SettingsButton);
     workspaceLayout->addLayout(header);
+    m_BranchesRoot = qEnvironmentVariable("LOGDIAG_BRANCH_ROOT");
+    if(m_BranchesRoot.isEmpty())
+        m_BranchesRoot = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../code_branches");
+    m_SourceBranchControls = new QWidget(workspace);
+    auto *branchRow = new QHBoxLayout(m_SourceBranchControls);
+    branchRow->setContentsMargins(0, 0, 0, 0);
+    branchRow->addWidget(new QLabel(QStringLiteral("源码分支"), workspace));
+    m_SourceBranchCombo = new QComboBox(workspace);
+    m_SourceBranchCombo->setObjectName("sourceBranchCombo");
+    branchRow->addWidget(m_SourceBranchCombo, 1);
+    auto *newBranch = new QPushButton(QStringLiteral("新建分支"), workspace);
+    newBranch->setObjectName("createSourceBranchButton");
+    auto *refreshBranches = new QPushButton(QStringLiteral("刷新分支"), workspace);
+    refreshBranches->setObjectName("refreshSourceBranchesButton");
+    auto *openBranch = new QPushButton(QStringLiteral("打开分支目录"), workspace);
+    branchRow->addWidget(newBranch);
+    branchRow->addWidget(refreshBranches);
+    branchRow->addWidget(openBranch);
+    workspaceLayout->addWidget(m_SourceBranchControls);
+    connect(newBranch, &QPushButton::clicked, this, &MainWindow::CreateSourceBranch);
+    connect(refreshBranches, &QPushButton::clicked, this, &MainWindow::RefreshSourceBranches);
+    connect(openBranch, &QPushButton::clicked, this, [this]() {
+        QDir().mkpath(m_BranchesRoot);
+        QDesktopServices::openUrl(QUrl::fromLocalFile(m_SourceBranch.isEmpty() ? m_BranchesRoot : CurrentBranchDirectory()));
+    });
     workspaceLayout->addWidget(CreateParserTab(), 1);
     setCentralWidget(workspace);
 
@@ -465,6 +498,9 @@ MainWindow::MainWindow(QWidget *parent, LegacyParserAdapter *parser, DeepSeekCli
         if(m_PipelineActive) FinishAnalysis(m_StopRequested ? QStringLiteral("分析已停止") : error);
         else m_ApiKeyStatusLabel->setText(QStringLiteral("连接失败：") + error);
     });
+    RefreshSourceBranches();
+    connect(m_SourceBranchCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int) { SelectSourceBranch(); });
     RefreshConfigSummary();
     connect(m_DictionaryEdit, &QLineEdit::textChanged, this, [this](const QString &) {
         if(!m_PipelineActive && m_InputCsvPaths.isEmpty()) InvalidateParsedResult(QStringLiteral("字典已更新，请重新解析日志"));
@@ -863,7 +899,7 @@ QWidget *MainWindow::CreateDeepSeekTab()
     const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
     m_DictionaryEdit = new QLineEdit(page);
     m_DictionaryEdit->setObjectName(QStringLiteral("analysisDictionaryPath"));
-    m_DictionaryEdit->setText(settings.value("analysis/dictionary/OPB", settings.value("analysis/dictionary",
+    m_DictionaryEdit->setText(settings.value(AnalysisSettingKey("analysis/dictionary/OPB"), settings.value(AnalysisSettingKey("analysis/dictionary"),
                     QDir(desktop).filePath(QStringLiteral("OPB/dictionary_PLFM.csv")))).toString());
     m_AnalysisBaselineEdit = new QLineEdit(page);
     m_AnalysisBaselineEdit->setObjectName(QStringLiteral("analysisBaselinePath"));
@@ -874,10 +910,10 @@ QWidget *MainWindow::CreateDeepSeekTab()
                 QStringLiteral("../test-output/OPB-Baseline-OriginalDictionary-3.db")));
     if(!QFileInfo(defaultBaseline).isFile() && QFileInfo(previousBaseline).isFile())
         defaultBaseline = previousBaseline;
-    m_AnalysisBaselineEdit->setText(settings.value("analysis/baseline/OPB", settings.value("analysis/baseline", defaultBaseline)).toString());
+    m_AnalysisBaselineEdit->setText(settings.value(AnalysisSettingKey("analysis/baseline/OPB"), settings.value(AnalysisSettingKey("analysis/baseline"), defaultBaseline)).toString());
     m_AnalysisVersionEdit = new QLineEdit(page);
     m_AnalysisVersionEdit->setObjectName(QStringLiteral("analysisSoftwareVersion"));
-    m_AnalysisVersionEdit->setText(settings.value("analysis/version/OPB", settings.value("analysis/version")).toString());
+    m_AnalysisVersionEdit->setText(settings.value(AnalysisSettingKey("analysis/version/OPB"), settings.value(AnalysisSettingKey("analysis/version"))).toString());
     m_AnalysisVersionEdit->setPlaceholderText(QStringLiteral("可留空，未知版本会在依据中注明"));
     m_SourceDatabaseEdit = new QLineEdit(page);
     m_SourceDatabaseEdit->setObjectName(QStringLiteral("analysisSourceDatabasePath"));
@@ -893,6 +929,7 @@ QWidget *MainWindow::CreateDeepSeekTab()
         QHBoxLayout *buttons = new QHBoxLayout(row);
         buttons->setContentsMargins(0, 0, 0, 0);
         QPushButton *browse = new QPushButton(QStringLiteral("浏览…"), row);
+        if(edit == m_SourceDatabaseEdit) browse->setObjectName("browseSourceDatabase");
         buttons->addWidget(edit, 1); buttons->addWidget(browse);
         connect(browse, &QPushButton::clicked, this, [this, edit, title, filter]() {
             const QString path = QFileDialog::getOpenFileName(this, title, edit->text(), filter);
@@ -949,6 +986,7 @@ QWidget *MainWindow::CreateDeepSeekTab()
 void MainWindow::SetManagementBusy(bool busy)
 {
     m_ManagementTaskActive = busy;
+    m_SourceBranchControls->setEnabled(!busy && !m_PipelineActive);
     for(QWidget *input : m_ManagementInputs) input->setEnabled(!busy);
     m_BuildBaselineButton->setEnabled(!busy && !m_PipelineActive);
     m_AddFaultSampleButton->setEnabled(!busy && !m_PipelineActive);
@@ -1084,7 +1122,7 @@ void MainWindow::FinishBaselineTask()
     {
         m_BaselineStatus->setText(QStringLiteral("100% · 正常基线建立完成"));
         m_BaselineProgress->setValue(100);
-        QSettings().setValue("analysis/baseline/" + m_ManagementBoard, result.databasePath);
+        QSettings().setValue(AnalysisSettingKey("analysis/baseline/" + m_ManagementBoard), result.databasePath);
         if(m_ManagementBoard == m_DetectedBoard || (m_DetectedBoard.isEmpty() && m_ManagementBoard == "OPB"))
             m_AnalysisBaselineEdit->setText(result.databasePath);
         SaveSettings();
@@ -1317,20 +1355,188 @@ void MainWindow::closeEvent(QCloseEvent *event)
     QMainWindow::closeEvent(event);
 }
 
+QString MainWindow::AnalysisSettingKey(const QString &key) const
+{
+    return m_SourceBranch.isEmpty() ? key : "sourceBranches/" + m_SourceBranch + '/' + key;
+}
+
+QString MainWindow::CurrentBranchDirectory() const
+{
+    return m_SourceBranch.isEmpty() ? QString() : QDir(m_BranchesRoot).filePath(m_SourceBranch);
+}
+
+void MainWindow::RefreshSourceBranches()
+{
+    if(m_PipelineActive || m_ManagementTaskActive) return;
+    auto *queryWidget = findChild<QWidget *>("sourceQueryWidget");
+    if(queryWidget && queryWidget->property("building").toBool()) return;
+    const QString selected = m_SourceBranch.isEmpty()
+        ? QSettings().value("sourceBranches/current").toString() : m_SourceBranch;
+    {
+        QSignalBlocker blocker(m_SourceBranchCombo);
+        m_SourceBranchCombo->clear();
+        const QDir root(m_BranchesRoot);
+        for(const auto &directory : root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+            if(directory.isSymLink()) continue;
+            if(QFileInfo(directory.filePath() + "/source").isDir() &&
+               QFileInfo(directory.filePath() + "/board_profiles.json").isFile())
+                m_SourceBranchCombo->addItem(directory.fileName(), directory.fileName());
+        }
+        if(m_SourceBranchCombo->count() == 0)
+            m_SourceBranchCombo->addItem(QStringLiteral("尚未添加源码分支"), QString());
+        const int previous = m_SourceBranchCombo->findData(selected);
+        if(previous >= 0) m_SourceBranchCombo->setCurrentIndex(previous);
+    }
+    SelectSourceBranch();
+}
+
+void MainWindow::LoadBranchBoardSettings()
+{
+    if(m_SourceBranch.isEmpty()) return;
+    QSettings settings;
+    const QString board = m_DetectedBoard.isEmpty() ? "OPB" : m_DetectedBoard;
+    const QString directory = CurrentBranchDirectory();
+    const QString dataDirectory = directory + "/data";
+    QDir().mkpath(dataDirectory);
+    const QString dictionary = directory + "/board_config/" + board + "/dictionary_PLFM.csv";
+    const QString baselineKey = "analysis/baseline/" + board;
+    const QString versionKey = "analysis/version/" + board;
+    // Import the original branch's saved baseline once through the scoped fallback.
+    const QString legacyBaseline = m_SourceBranch == "MSCP_MSCP"
+        ? settings.value(baselineKey, board == "OPB" ? settings.value("analysis/baseline") : QVariant()).toString() : QString();
+    const QString legacyVersion = m_SourceBranch == "MSCP_MSCP"
+        ? settings.value(versionKey, board == "OPB" ? settings.value("analysis/version") : QVariant()).toString() : QString();
+    m_AnalysisBaselineEdit->setText(settings.value(AnalysisSettingKey(baselineKey), legacyBaseline).toString());
+    m_AnalysisVersionEdit->setText(settings.value(AnalysisSettingKey(versionKey), legacyVersion).toString());
+    m_DictionaryEdit->setText(settings.value(AnalysisSettingKey("analysis/dictionary/" + board), dictionary).toString());
+    m_SourceDatabaseEdit->setText(directory + "/relations/source." + board + ".sqlite");
+    m_BaselineDatabaseEdit->setText(m_AnalysisBaselineEdit->text().isEmpty()
+        ? dataDirectory + '/' + board + "-Baseline.db" : m_AnalysisBaselineEdit->text());
+    m_FaultDatabaseEdit->setText(dataDirectory + '/' + board + "-FaultSamples.db");
+}
+
+void MainWindow::SelectSourceBranch()
+{
+    const QString selected = m_SourceBranchCombo->currentData().toString();
+    if(selected == m_SourceBranch) return;
+    auto *queryWidget = findChild<QWidget *>("sourceQueryWidget");
+    if(m_PipelineActive || m_ManagementTaskActive || (queryWidget && queryWidget->property("building").toBool())) {
+        QSignalBlocker blocker(m_SourceBranchCombo);
+        m_SourceBranchCombo->setCurrentIndex(m_SourceBranchCombo->findData(m_SourceBranch));
+        m_StageLabel->setText(QStringLiteral("请等待当前任务结束后切换源码分支"));
+        return;
+    }
+    SaveSettings();
+    auto *dialog = findChild<QDialog *>("sourceRelationsDialog");
+    if(dialog) delete dialog;
+    m_SourceBranch = selected;
+    QSettings().setValue("sourceBranches/current", selected);
+    m_SourceDatabaseEdit->setReadOnly(!selected.isEmpty());
+    auto *browse = findChild<QPushButton *>("browseSourceDatabase");
+    if(browse) browse->setEnabled(selected.isEmpty());
+    if(selected.isEmpty()) {
+        m_SourceDatabaseEdit->setText(QSettings().value("sourceRelations/database").toString());
+        m_AnalysisBaselineEdit->clear();
+        m_AnalysisVersionEdit->clear();
+        m_DictionaryEdit->clear();
+    } else LoadBranchBoardSettings();
+    m_BaselineFilesList->clear();
+    m_FaultFilesList->clear();
+    m_BaselineResultOutput->clear();
+    m_FaultResultOutput->clear();
+    m_AiResultOutput->clear();
+    m_LocalReportOutput->clear();
+    m_EvidenceInput->clear();
+    if(m_InputCsvPaths.isEmpty()) InvalidateParsedResult(QStringLiteral("源码分支已切换，请使用对应字典重新解析原始日志"));
+    else m_StageLabel->setText(QStringLiteral("源码分支已切换为 %1，可使用当前 CSV 重新分析").arg(selected));
+    RefreshConfigSummary();
+    RefreshActionButtons();
+}
+
+void MainWindow::ConfigureSourceQueryWidget(QWidget *widget)
+{
+    if(!widget || m_SourceBranch.isEmpty()) return;
+    const QString directory = CurrentBranchDirectory();
+    widget->setProperty("sourceRoot", directory + "/source");
+    widget->setProperty("profilesPath", directory + "/board_profiles.json");
+    widget->setProperty("sourceBranch", m_SourceBranch);
+    widget->setProperty("expectedBoard", m_DetectedBoard.isEmpty() ? "OPB" : m_DetectedBoard);
+    auto *path = widget->findChild<QLineEdit *>("sourceDatabasePath");
+    if(path) { path->setText(m_SourceDatabaseEdit->text()); path->setReadOnly(true); }
+    auto *browse = widget->findChild<QPushButton *>("browseSourceDatabase");
+    if(browse) browse->setEnabled(false);
+}
+
+void MainWindow::CreateSourceBranch()
+{
+    if(m_PipelineActive || m_ManagementTaskActive) return;
+    auto *queryWidget = findChild<QWidget *>("sourceQueryWidget");
+    if(queryWidget && queryWidget->property("building").toBool()) return;
+    bool accepted = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("新建源码分支"),
+        QStringLiteral("输入分支名称"), QLineEdit::Normal, QString(), &accepted).trimmed();
+    if(!accepted || name.isEmpty()) return;
+    if(name == "." || name == ".." || name.contains(QRegularExpression("[<>:\"/\\\\|?*]")) || name.endsWith('.') || name.endsWith(' ')) {
+        m_StageLabel->setText(QStringLiteral("分支名称包含无效的文件夹字符"));
+        return;
+    }
+    const QString destination = QDir(m_BranchesRoot).filePath(name);
+    if(QFileInfo::exists(destination)) {
+        m_StageLabel->setText(QStringLiteral("同名分支目录已存在，请点击“刷新分支”"));
+        return;
+    }
+    QFile manifest(QCoreApplication::applicationDirPath() + "/source_relations/board_profiles.json");
+    if(!manifest.open(QIODevice::ReadOnly)) { m_StageLabel->setText(QStringLiteral("无法读取板卡配置模板")); return; }
+    QJsonObject profiles = QJsonDocument::fromJson(manifest.readAll()).object();
+    if(profiles.size() != BoardIdentity::boards().size()) { m_StageLabel->setText(QStringLiteral("板卡配置模板无效")); return; }
+    if(!QDir().mkpath(m_BranchesRoot)) { m_StageLabel->setText(QStringLiteral("无法创建分支存储目录")); return; }
+    QTemporaryDir pending(QDir(m_BranchesRoot).filePath(".creating-XXXXXX"));
+    if(!pending.isValid()) { m_StageLabel->setText(QStringLiteral("无法创建分支临时目录")); return; }
+    const QString directory = pending.path();
+    if(!QDir().mkpath(directory + "/source") || !QDir().mkpath(directory + "/relations") || !QDir().mkpath(directory + "/data")) {
+        m_StageLabel->setText(QStringLiteral("无法创建分支目录")); return;
+    }
+    for(const QString &board : BoardIdentity::boards()) {
+        const QString target = directory + "/board_config/" + board;
+        QString original = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../board_config/" + board + "/PROJECT_OR_BOARD_PTCL.h");
+        if(!QFileInfo::exists(original)) original = QCoreApplication::applicationDirPath() + "/source_relations/config/" + board + "/PROJECT_OR_BOARD_PTCL.h";
+        if(!QDir().mkpath(target) || !QFile::copy(original, target + "/PROJECT_OR_BOARD_PTCL.h")) {
+            m_StageLabel->setText(QStringLiteral("无法为 %1 复制板卡配置，请检查分支目录").arg(board)); return;
+        }
+        QJsonObject profile = profiles[board].toObject();
+        profile.insert("configuration_header", "board_config/" + board + "/PROJECT_OR_BOARD_PTCL.h");
+        profile.remove("fallback_header");
+        profile.remove("ignore_includes");
+        profiles.insert(board, profile);
+    }
+    QSaveFile output(directory + "/board_profiles.json");
+    const QByteArray contents = QJsonDocument(profiles).toJson(QJsonDocument::Indented);
+    if(!output.open(QIODevice::WriteOnly) || output.write(contents) != contents.size() || !output.commit()) {
+        m_StageLabel->setText(QStringLiteral("无法保存分支配置清单")); return;
+    }
+    if(!QDir().rename(directory, destination)) { m_StageLabel->setText(QStringLiteral("无法保存新分支目录")); return; }
+    pending.setAutoRemove(false);
+    RefreshSourceBranches();
+    m_SourceBranchCombo->setCurrentIndex(m_SourceBranchCombo->findData(name));
+    QDesktopServices::openUrl(QUrl::fromLocalFile(destination));
+    m_StageLabel->setText(QStringLiteral("分支已创建。请将完整源码放入 source，核对 board_config，并在“源码关系查询”中重建关系库"));
+}
+
 void MainWindow::SaveSettings()
 {
     QSettings settings;
     if(m_DetectedBoard.isEmpty() || m_DetectedBoard == "OPB") {
-        settings.setValue("analysis/dictionary", m_DictionaryEdit->text().trimmed());
-        settings.setValue("analysis/baseline", m_AnalysisBaselineEdit->text().trimmed());
-        settings.setValue("analysis/version", m_AnalysisVersionEdit->text().trimmed());
+        settings.setValue(AnalysisSettingKey("analysis/dictionary"), m_DictionaryEdit->text().trimmed());
+        settings.setValue(AnalysisSettingKey("analysis/baseline"), m_AnalysisBaselineEdit->text().trimmed());
+        settings.setValue(AnalysisSettingKey("analysis/version"), m_AnalysisVersionEdit->text().trimmed());
     }
-    if(!m_DetectedBoard.isEmpty()) {
-        settings.setValue("analysis/dictionary/" + m_DetectedBoard, m_DictionaryEdit->text().trimmed());
-        settings.setValue("analysis/baseline/" + m_DetectedBoard, m_AnalysisBaselineEdit->text().trimmed());
-        settings.setValue("analysis/version/" + m_DetectedBoard, m_AnalysisVersionEdit->text().trimmed());
+    const QString board = m_DetectedBoard.isEmpty() ? "OPB" : m_DetectedBoard;
+    if(!m_SourceBranch.isEmpty() || !m_DetectedBoard.isEmpty()) {
+        settings.setValue(AnalysisSettingKey("analysis/dictionary/" + board), m_DictionaryEdit->text().trimmed());
+        settings.setValue(AnalysisSettingKey("analysis/baseline/" + board), m_AnalysisBaselineEdit->text().trimmed());
+        settings.setValue(AnalysisSettingKey("analysis/version/" + board), m_AnalysisVersionEdit->text().trimmed());
     }
-    settings.setValue("sourceRelations/database", m_SourceDatabaseEdit->text().trimmed());
+    if(m_SourceBranch.isEmpty()) settings.setValue("sourceRelations/database", m_SourceDatabaseEdit->text().trimmed());
     settings.setValue("analysis/applicationLogs", m_IncludeApplicationLogCheckBox->isChecked());
     settings.setValue("deepseek/model", m_ModelComboBox->currentText());
     if(m_RememberApiKeyCheckBox->isChecked() && !m_ApiKeyEdit->text().trimmed().isEmpty())
@@ -1352,6 +1558,7 @@ void MainWindow::RefreshConfigSummary()
 void MainWindow::SetPipelineBusy(bool busy)
 {
     m_PipelineActive = busy;
+    m_SourceBranchControls->setEnabled(!busy && !m_ManagementTaskActive);
     RefreshActionButtons();
     m_StopButton->setEnabled(busy);
     m_SourceLogEdit->setEnabled(!busy);
@@ -1406,7 +1613,7 @@ void MainWindow::RefreshActionButtons()
     m_StartAiButton->setEnabled(available && HasCurrentParsedFiles());
     m_StopButton->setEnabled(m_PipelineActive && !m_StopRequested && !m_Closing);
     auto *sourceButton = findChild<QPushButton *>(QStringLiteral("sourceRelationsButton"));
-    if(sourceButton) sourceButton->setEnabled(available && !m_DetectedBoard.isEmpty() && !m_SourceLogEdit->text().isEmpty());
+    if(sourceButton) sourceButton->setEnabled(available && (!m_SourceBranch.isEmpty() || (!m_DetectedBoard.isEmpty() && !m_SourceLogEdit->text().isEmpty())));
 }
 
 void MainWindow::InvalidateParsedResult(const QString &message)
@@ -1462,6 +1669,10 @@ void MainWindow::StartAnalysis()
     m_Action = Action::Ai;
     const QStringList inputPaths = m_InputCsvPaths.isEmpty() ? m_ParsedCsvPaths : m_InputCsvPaths;
     if(!DetectAnalysisBoard(inputPaths)) { m_Action = Action::None; return; }
+    if(!m_SourceBranch.isEmpty() && !QFileInfo(BoardIdentity::sourceDatabase(m_SourceDatabaseEdit->text(), CurrentBoardId())).isFile()) {
+        FinishAnalysis(QStringLiteral("当前分支尚无 %1 关系库，请打开“源码关系查询”并点击“重建关系库”").arg(CurrentBoardId()));
+        return;
+    }
     if(m_ApiKeyEdit->text().trimmed().isEmpty())
     {
         FinishAnalysis(QStringLiteral("请在设置中填写 API Key；已解析的 CSV 会保留"));
@@ -1492,17 +1703,26 @@ void MainWindow::CompareWithBaseline(const QStringList &outputs)
     SetWorkspaceStatus(QStringLiteral("基线比较中"), true);
     const auto input = m_DiagnosticInput;
     const QString sourceDatabase = m_SourceDatabaseEdit->text().trimmed();
+    const QString sourceBranch = m_SourceBranch;
+    const QString sourceRoot = CurrentBranchDirectory() + "/source";
     const QString board = CurrentBoardId();
     SourceQueryInterface *plugin = LoadSourceQueryPlugin(nullptr);
-    m_DiagnosticWatcher.setFuture(QtConcurrent::run([input, sourceDatabase, board, plugin]() {
+    m_DiagnosticWatcher.setFuture(QtConcurrent::run([input, sourceDatabase, sourceBranch, sourceRoot, board, plugin]() {
         auto result = OpbDiagnosticAnalyzer().Analyze(input);
         if(!result.success || (input.cancelled && input.cancelled->load())) return result;
         result.evidence = RelevantAiEvidence(result.evidence);
+        if(!sourceBranch.isEmpty())
+            result.evidence.insert("source_branch", QJsonObject{{"name", sourceBranch}, {"source_root", sourceRoot}});
         QJsonObject sourceEvidence;
         if(plugin) sourceEvidence = plugin->collectEvidence(sourceDatabase, result.evidence, input.softwareVersion, board, input.cancelled);
         else sourceEvidence = QJsonObject{{"schema_version", "source-evidence/1"}, {"status", "unavailable"},
                                          {"records", QJsonArray()}, {"message", QStringLiteral("源码查询插件不可用，当前分析缺少源码证据")}};
         result.evidence.insert("source_evidence", sourceEvidence);
+        if(sourceEvidence["status"].toString() == "branch_mismatch") {
+            result.success = false;
+            result.errorMessage = sourceEvidence["message"].toString();
+            return result;
+        }
         if(!sourceEvidence.value("records").toArray().isEmpty())
             result.evidence.insert("export_policy", "parsed_logs_and_bounded_source_snippets_with_relative_paths");
         return result;
@@ -1622,21 +1842,22 @@ bool MainWindow::DetectAnalysisBoard(const QStringList &paths)
     if(board != m_DetectedBoard) {
         QSettings settings;
         if(!m_DetectedBoard.isEmpty()) {
-            settings.setValue("analysis/baseline/" + m_DetectedBoard, m_AnalysisBaselineEdit->text().trimmed());
-            settings.setValue("analysis/dictionary/" + m_DetectedBoard, m_DictionaryEdit->text().trimmed());
-            settings.setValue("analysis/version/" + m_DetectedBoard, m_AnalysisVersionEdit->text().trimmed());
+            settings.setValue(AnalysisSettingKey("analysis/baseline/" + m_DetectedBoard), m_AnalysisBaselineEdit->text().trimmed());
+            settings.setValue(AnalysisSettingKey("analysis/dictionary/" + m_DetectedBoard), m_DictionaryEdit->text().trimmed());
+            settings.setValue(AnalysisSettingKey("analysis/version/" + m_DetectedBoard), m_AnalysisVersionEdit->text().trimmed());
         }
-        if(!m_DetectedBoard.isEmpty() || board != "OPB") {
+        if(m_SourceBranch.isEmpty() && (!m_DetectedBoard.isEmpty() || board != "OPB")) {
             const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
-            const QString fallback = board == "OPB" ? settings.value("analysis/baseline").toString()
+            const QString fallback = board == "OPB" ? settings.value(AnalysisSettingKey("analysis/baseline")).toString()
                 : QDir(desktop).filePath("LogDiagnosisData/" + board + "-Baseline.db");
-            m_AnalysisBaselineEdit->setText(settings.value("analysis/baseline/" + board, fallback).toString());
-            m_DictionaryEdit->setText(settings.value("analysis/dictionary/" + board,
-                settings.value("analysis/dictionary", m_DictionaryEdit->text())).toString());
-            m_AnalysisVersionEdit->setText(settings.value("analysis/version/" + board,
-                board == "OPB" ? settings.value("analysis/version") : QVariant(QString())).toString());
+            m_AnalysisBaselineEdit->setText(settings.value(AnalysisSettingKey("analysis/baseline/" + board), fallback).toString());
+            m_DictionaryEdit->setText(settings.value(AnalysisSettingKey("analysis/dictionary/" + board),
+                settings.value(AnalysisSettingKey("analysis/dictionary"), m_DictionaryEdit->text())).toString());
+            m_AnalysisVersionEdit->setText(settings.value(AnalysisSettingKey("analysis/version/" + board),
+                board == "OPB" ? settings.value(AnalysisSettingKey("analysis/version")) : QVariant(QString())).toString());
         }
         m_DetectedBoard = board;
+        if(!m_SourceBranch.isEmpty()) LoadBranchBoardSettings();
     }
     m_AutoBoardLabel->setText(QStringLiteral("自动识别 · %1").arg(board));
     auto *sourceDialog = findChild<QDialog *>(QStringLiteral("sourceRelationsDialog"));

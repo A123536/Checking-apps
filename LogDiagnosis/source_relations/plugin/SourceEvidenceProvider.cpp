@@ -1,5 +1,5 @@
 #include "SourceEvidenceProvider.h"
-#include "../../../NewAnalysis/BoardIdentity.h"
+#include "../../NewAnalysis/BoardIdentity.h"
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -320,6 +320,17 @@ QJsonObject SourceEvidenceProvider::collect(const QString &databasePath, const Q
         const auto metadataRows = connection.query("SELECT key,value FROM metadata");
         QVariantMap metadata;
         for(const auto &row : metadataRows) metadata.insert(row["key"].toString(), row["value"]);
+        const auto selectedBranch = logEvidence["source_branch"].toObject();
+        if(!selectedBranch.isEmpty()) {
+            const QString expectedRoot = QDir(selectedBranch["source_root"].toString()).canonicalPath();
+            const QString indexedRoot = QDir(metadata["source_root"].toString()).canonicalPath();
+            if(expectedRoot.isEmpty() || expectedRoot.compare(indexedRoot, Qt::CaseInsensitive) != 0) {
+                result.insert("status", "branch_mismatch");
+                result.insert("message", QStringLiteral("关系库的源码目录与当前分支不一致，请重建当前分支关系库"));
+                return result;
+            }
+            result.insert("source_branch", selectedBranch["name"]);
+        }
         if(metadata["format"] != "logdiagnosis-source-relations" || metadata["schema_version"] != "1")
             throw std::runtime_error("Unsupported source index format or schema");
         if(metadata["board"].toString() != board || metadata["analysis_mode"] != "board_scoped_conditionals")

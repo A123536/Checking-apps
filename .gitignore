@@ -15,6 +15,11 @@
 LogDiagnosis/test-input/
 LogDiagnosis/test-output/
 LogDiagnosis/source_relations/config/
+LogDiagnosis/board_config/
+LogDiagnosis/code_branches/*/source/
+LogDiagnosis/code_branches/*/board_config/
+LogDiagnosis/code_branches/*/data/
+LogDiagnosis/code_branches/*/relations/
 *.db
 *.db-*
 *.sqlite

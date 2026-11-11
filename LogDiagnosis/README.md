@@ -1,12 +1,14 @@
 # LogDiagnosis
 
+主界面支持选择源码分支，工程 code_branches 为各分支保存源码、板卡配置清单和独立关系库。当前分支为 MSCP_MSCP。加入新分支的步骤见 [分支使用说明](分支使用说明.md)。
+
 AI 分析每次加载 [crash-log-rca/SKILL.md](skills/crash-log-rca/SKILL.md)，按其中的周期切段、五层下钻、源码定位、对照和报告模板进行分析。修改该文件后，下次点击“AI 分析”即加载更新。“AI 分析依据”的 `analysis_skill` 记录文件哈希，`rca_trace` 提供最近已观测周期的有序原始日志和来源行号，截取范围及资源限制随证据记录。
 
 最新版技能要求自检逐项穷举，核对表覆盖正常项和所有异常项，并逐项标明致宕、伴生或待核实。软件补充 `source_evidence.self_check_review`，按有序日志检索自检编码的源码位置与当前板卡自检文件正文。结论先简明列出各个有证据的问题，核对表保留完整条目，重复事实集中表述。
 
 主界面只有一个日志分析页面，日常操作为：
 
-1. 拖入或浏览选择文件名含 ATP、IPB、OPB 或 SPB 的原始暗文日志，板卡自动识别，并使用桌面对应板卡目录中的配置头文件。
+1. 拖入或浏览选择文件名含 ATP、IPB、OPB 或 SPB 的原始暗文日志，板卡自动识别，并使用工程 board_config 对应板卡目录中的配置头文件。
 2. 点击“日志解析”，只解析并生成 CSV，不调用 DeepSeek；结果区域显示生成文件的路径。
 3. 点击“AI 分析”，复用本次 CSV，与正常基线比较、检索源码关系库并调用 DeepSeek，在同页显示分析结果。
 
@@ -95,6 +97,8 @@ LogDiagnosis.exe --diagnose-opb baseline.db incident-evidence.json capture.txt1.
 - 测试夹具不进入正式基线或故障样本库。
 
 ## 构建
+
+统一打开工程根目录的 `LogDiagnosis.pro` 构建和运行。日志解析核心保存在工程内的 `NewAnalysis/`，主程序、插件和测试均引用此目录。发布程序为 `bin/LogDiagnosis.exe`。
 
 Qt 模块：widgets、sql、network、concurrent；测试另需 testlib。
 

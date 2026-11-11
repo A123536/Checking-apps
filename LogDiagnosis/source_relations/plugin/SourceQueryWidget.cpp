@@ -1,8 +1,9 @@
 #include "SourceQueryWidget.h"
-#include "../../../NewAnalysis/BoardIdentity.h"
+#include "../../NewAnalysis/BoardIdentity.h"
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFile>
@@ -66,7 +67,9 @@ SourceQueryWidget::SourceQueryWidget(const QString &databasePath, QWidget *paren
     m_Path->setObjectName("sourceDatabasePath");
     m_Path->setText(databasePath);
     m_Browse = new QPushButton(QStringLiteral("选择关系库"), this);
+    m_Browse->setObjectName("browseSourceDatabase");
     m_Rebuild = new QPushButton(QStringLiteral("重建关系库"), this);
+    m_Rebuild->setObjectName("rebuildSourceDatabaseButton");
     m_Cancel = new QPushButton(QStringLiteral("取消建库"), this);
     m_Cancel->setEnabled(false);
     databaseRow->addWidget(m_Path, 1);
@@ -363,10 +366,11 @@ void SourceQueryWidget::showSource(qint64 fileId, int line)
 
 void SourceQueryWidget::setBuilding(bool busy)
 {
+    setProperty("building", busy);
     m_Rebuild->setEnabled(!busy);
-    m_Browse->setEnabled(!busy);
+    m_Browse->setEnabled(!busy && property("sourceBranch").toString().isEmpty());
     m_Cancel->setEnabled(busy);
-    m_Path->setReadOnly(busy);
+    m_Path->setReadOnly(busy || !property("sourceBranch").toString().isEmpty());
 }
 
 void SourceQueryWidget::rebuild()
@@ -376,11 +380,18 @@ void SourceQueryWidget::rebuild()
         QMessageBox::warning(this, QStringLiteral("源码关系库"), QStringLiteral("缺少建库工具。%1").arg(executable));
         return;
     }
-    const auto metadata = query("SELECT value FROM metadata WHERE key='source_root'");
-    const QString source = QFileDialog::getExistingDirectory(this, QStringLiteral("选择 C/H 源码目录"), metadata.isEmpty() ? QString() : metadata[0]["value"].toString());
+    QString source = property("sourceRoot").toString();
+    if(source.isEmpty()) {
+        const auto metadata = query("SELECT value FROM metadata WHERE key='source_root'");
+        source = QFileDialog::getExistingDirectory(this, QStringLiteral("选择 C/H 源码目录"), metadata.isEmpty() ? QString() : metadata[0]["value"].toString());
+    }
     if(source.isEmpty()) return;
+    QDirIterator sources(source, {"*.c", "*.h", "*.C", "*.H"}, QDir::Files, QDirIterator::Subdirectories);
+    if(!sources.hasNext()) { m_Status->setText(QStringLiteral("当前分支 source 目录中没有 C/H 源码，请先放入完整源码")); return; }
+    const QString profiles = property("profilesPath").toString();
+    if(!profiles.isEmpty() && !QFileInfo(profiles).isFile()) { m_Status->setText(QStringLiteral("当前分支缺少 board_profiles.json")); return; }
     bool accepted = false;
-    const QString version = QInputDialog::getText(this, QStringLiteral("源码版本"), QStringLiteral("输入此次快照的软件版本或标记"), QLineEdit::Normal, QString(), &accepted);
+    const QString version = QInputDialog::getText(this, QStringLiteral("源码版本"), QStringLiteral("输入此次快照的软件版本或标记"), QLineEdit::Normal, property("sourceBranch").toString(), &accepted);
     if(!accepted) return;
     QString output = m_Path->text().trimmed();
     if(output.isEmpty()) {
@@ -394,5 +405,7 @@ void SourceQueryWidget::rebuild()
     m_Status->setText(QStringLiteral("正在建立源码关系库…"));
     m_CancelPath = QDir(QFileInfo(output).absolutePath()).filePath(".source-index-" + QUuid::createUuid().toString(QUuid::WithoutBraces) + ".cancel");
     setBuilding(true);
-    m_Process->start(executable, {"--source", source, "--output", output, "--all-boards", "--version", version, "--cancel-file", m_CancelPath});
+    QStringList arguments{"--source", source, "--output", output, "--all-boards", "--version", version, "--cancel-file", m_CancelPath};
+    if(!profiles.isEmpty()) arguments << "--profiles" << profiles;
+    m_Process->start(executable, arguments);
 }

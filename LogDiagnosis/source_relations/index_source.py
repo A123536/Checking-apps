@@ -536,6 +536,8 @@ def read_profiles(path=None):
         configured = profile.get('configuration_header')
         if not configured: continue
         header = Path(os.path.expandvars(configured)).expanduser()
+        if not header.is_absolute():
+            header = profiles_path.parent / header
         origin = 'provided_configuration_file'
         if not header.is_file():
             header = profiles_path.parent / profile.get('fallback_header', '')

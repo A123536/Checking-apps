@@ -1,5 +1,7 @@
 # 源码函数调用关系库与查询插件 v1.2
 
+主程序通过“源码分支”选择工程 code_branches 中的源码快照。每个分支使用独立 relations 目录和 board_profiles.json。分支模式下，“重建关系库”使用已选分支的 source 和配置清单，源码查询与 AI 分析共用当前分支。操作步骤见 [分支使用说明](../分支使用说明.md)。
+
 ## 使用
 
 运行 `../bin/LogDiagnosis.exe`，导入文件名包含 ATP、IPB、OPB 或 SPB 的日志。界面自动显示识别结果，顶部“源码关系查询”打开对应板卡库。
@@ -19,14 +21,14 @@
 部署的建库工具自带 Python 运行时及解析依赖，可以独立使用。
 
 ```powershell
-& .\bin\source_relations\SourceIndexer.exe --source 'C:\path\to\MSCP_MSCP' --output '.\bin\source_relations\MSCP_MSCP.sqlite' --all-boards --version '你的软件版本'
+& .\bin\source_relations\SourceIndexer.exe --source '.\code_branches\MSCP_MSCP\source' --output '.\code_branches\MSCP_MSCP\relations\source.sqlite' --profiles '.\code_branches\MSCP_MSCP\board_profiles.json' --all-boards --version '你的软件版本'
 ```
 
 也可安装 `requirements.txt` 依赖后运行 `index_source.py`。`--all-boards` 构建四份独立库，`--board OPB` 等参数构建单板卡库。`--profiles` 可指定四板卡宏配置 JSON。已部署的独立工具优先读取同目录 `board_profiles.json`，界面重建按钮会重建四板卡库。
 
-`board_profiles.json` 按板卡索引桌面 `ATP`、`IPB`、`OPB`、`SPB` 文件夹中的 `PROJECT_OR_BOARD_PTCL.h`，读取实际的主宏、监控、多线程、自检、日志及周期配置。工具预载所选头文件，再沿本地 include 链求值，未定义宏按 C 预处理规则处理。主宏必须与板卡标识一致，否则建库失败。
+`board_profiles.json` 按板卡索引工程 `board_config/ATP`、`board_config/IPB`、`board_config/OPB`、`board_config/SPB` 文件夹中的 `PROJECT_OR_BOARD_PTCL.h`，路径相对于配置清单解析，读取实际的主宏、监控、多线程、自检、日志及周期配置。工具预载所选头文件，再沿本地 include 链求值，未定义宏按 C 预处理规则处理。主宏必须与板卡标识一致，否则建库失败。
 
-每份库记录配置头及依赖的哈希、实际宏快照和来源。每次 AI 查询先校验配置文件，发生变化时在后台自动重建该板卡库。配置目录的副本随工具保存于 `config/`，原桌面文件优先使用。按用户确认，ATP 引用的 `integrationconfig.h` 不参与本次分析，在 profile 的 `ignored_includes` 中记录，ATP 使用已提供主头文件中的板卡与功能开关。
+每份库记录配置头及依赖的哈希、实际宏快照和来源。每次 AI 查询先校验配置文件，发生变化时在后台自动重建该板卡库。配置目录的副本随工具保存于 `config/`，工程 `board_config/` 中的文件优先使用。按用户确认，ATP 引用的 `integrationconfig.h` 不参与本次分析，在 profile 的 `ignored_includes` 中记录，ATP 使用已提供主头文件中的板卡与功能开关。
 
 建库采用同目录唯一临时文件、完整事务、数据库完整性校验和原子替换。`--cancel-file` 指定一个取消标记路径，工具发现标记后回滚并移除自己的临时数据库。强制结束进程或断电可能留下 `.building` 临时文件，已有完整关系库仍保留。
 
@@ -60,7 +62,7 @@
 
 ## AI 分析自动关联
 
-点击主窗口“AI 分析”后，后台先完成日志／基线诊断，再通过插件只读查询设置页指定的源码关系库，最后把合并证据交给 DeepSeek。无需先打开查询窗口。默认复用已部署的 MSCP_MSCP 关系库，也可在分析设置中切换。
+点击主窗口“AI 分析”后，后台先完成日志／基线诊断，再通过插件只读查询设置页指定的源码关系库，最后把合并证据交给 DeepSeek。无需先打开查询窗口。主界面所选源码分支决定本次分析使用的关系库。
 
 AI 流程按明确失败与异常候选涉及的编码检索源码，避免正常编码消耗源码检索范围。每次最多查询 12 个编码，发送 12 个源码记录点，源码证据上限为 48,000 UTF-8 字节。上下游关系最多两层，代码片段与关系均限量截取。这些是源码检索的资源限制，报告按实际证据组织独立问题。
 

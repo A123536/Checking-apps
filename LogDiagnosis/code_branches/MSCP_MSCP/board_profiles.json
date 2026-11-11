@@ -1,0 +1,29 @@
+{
+  "ATP": {
+    "configuration_header": "../../board_config/ATP/PROJECT_OR_BOARD_PTCL.h",
+    "expected_board_macro": "IS_5728_MCP",
+    "defines": {},
+    "closed_world": true,
+    "ignore_includes": [
+      "integrationconfig.h"
+    ]
+  },
+  "IPB": {
+    "configuration_header": "../../board_config/IPB/PROJECT_OR_BOARD_PTCL.h",
+    "expected_board_macro": "IS_570_IPB",
+    "defines": {},
+    "closed_world": true
+  },
+  "OPB": {
+    "configuration_header": "../../board_config/OPB/PROJECT_OR_BOARD_PTCL.h",
+    "expected_board_macro": "IS_570_OPB",
+    "defines": {},
+    "closed_world": true
+  },
+  "SPB": {
+    "configuration_header": "../../board_config/SPB/PROJECT_OR_BOARD_PTCL.h",
+    "expected_board_macro": "IS_570_SIG",
+    "defines": {},
+    "closed_world": true
+  }
+}

@@ -53,6 +53,17 @@ private:
     QLineEdit *m_AnalysisBaselineEdit;
     QLineEdit *m_AnalysisVersionEdit;
     QLineEdit *m_SourceDatabaseEdit;
+    QComboBox *m_SourceBranchCombo = nullptr;
+    QWidget *m_SourceBranchControls = nullptr;
+    QString m_BranchesRoot;
+    QString m_SourceBranch;
+    QString AnalysisSettingKey(const QString &key) const;
+    QString CurrentBranchDirectory() const;
+    void RefreshSourceBranches();
+    void SelectSourceBranch();
+    void CreateSourceBranch();
+    void LoadBranchBoardSettings();
+    void ConfigureSourceQueryWidget(QWidget *widget);
     SourceQueryInterface *m_SourceQueryPlugin = nullptr;
     QString m_DetectedBoard;
     QLabel *m_AutoBoardLabel;

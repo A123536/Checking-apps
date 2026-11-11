@@ -7,7 +7,7 @@
 #include <QSqlQuery>
 #include <QProcess>
 #include <QDir>
-#include "../../../NewAnalysis/BoardIdentity.h"
+#include "../../NewAnalysis/BoardIdentity.h"
 #include <QComboBox>
 #include <QLabel>
 #include <QFontDatabase>
@@ -27,6 +27,18 @@ class SourceQueryTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void rejectsDatabaseFromAnotherSourceBranch()
+    {
+        QPluginLoader loader(qEnvironmentVariable("SOURCE_RELATIONS_PLUGIN"));
+        auto *plugin = qobject_cast<SourceQueryInterface *>(loader.instance()); QVERIFY(plugin);
+        QTemporaryDir otherBranch;
+        const QJsonObject logs{{"source_branch", QJsonObject{{"name", "other"}, {"source_root", otherBranch.path()}}}};
+        const auto result = plugin->collectEvidence(qEnvironmentVariable("SOURCE_RELATIONS_DATABASE"), logs, {}, "OPB",
+                                                   std::make_shared<std::atomic_bool>(false));
+        QCOMPARE(result["status"].toString(), QString("branch_mismatch"));
+        QVERIFY(result["records"].toArray().isEmpty());
+    }
+
     void selfCheckReviewIncludesNormalItemsBeyondPrimaryLimit()
     {
         QPluginLoader loader(qEnvironmentVariable("SOURCE_RELATIONS_PLUGIN"));
