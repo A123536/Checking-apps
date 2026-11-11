@@ -1,0 +1,27 @@
+# Local build and runtime files
+**/bin/
+**/build*/
+**/__pycache__/
+*.py[cod]
+*.o
+*.obj
+*.a
+*.exe
+*.dll
+*.pro.user*
+.qmake.stash
+
+# Local source inputs, logs, dictionaries and generated databases
+LogDiagnosis/test-input/
+LogDiagnosis/test-output/
+LogDiagnosis/source_relations/config/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.building
+*.cancel
+*.csv
+*.log
+.env
+.env.*

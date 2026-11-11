@@ -1,0 +1,11 @@
+QT += core sql testlib
+QT -= gui
+CONFIG += console c++11 testcase
+CONFIG -= app_bundle
+TEMPLATE = app
+TARGET = DiagnosisTests
+INCLUDEPATH += .. ../../NewAnalysis
+SOURCES += DiagnosisTests.cpp ../OpbDiagnosticAnalyzer.cpp ../OpbSnapshotAnalyzer.cpp ../OpbFaultSampleStore.cpp ../../NewAnalysis/OpbBaselineAnalyzer.cpp
+HEADERS += ../OpbDiagnosticAnalyzer.h ../OpbFaultSampleStore.h ../../NewAnalysis/OpbBaselineAnalyzer.h ../../NewAnalysis/LogCsvReader.h
+HEADERS += ../../NewAnalysis/BoardIdentity.h
+HEADERS += ../RcaTrace.h ../OpbSnapshotAnalyzer.h
